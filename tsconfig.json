@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["server.ts", "host.ts", "app.tsx", "src", "test", "vendor/provider-claude-code/server.ts", "vendor/provider-claude-code/src"],
+  "exclude": ["vendor/provider-claude-code/src/**/*.test.ts"]
+}
