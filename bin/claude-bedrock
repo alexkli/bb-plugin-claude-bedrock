@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Claude Code executable for the Claude Code (Bedrock) provider. The plugin
+# points bb's Claude Code bridge here (BB_CLAUDE_CODE_EXECUTABLE) and passes the
+# real claude as CLAUDE_BEDROCK_CLAUDE. With Node.js available, claude runs
+# behind claude-cost-tap.mjs, which records each session's cost in the Bedrock
+# cost ledger for the plugin's usage entry; without it, claude runs directly.
+set -euo pipefail
+here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+claude="${CLAUDE_BEDROCK_CLAUDE:-claude}"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+if command -v node >/dev/null; then
+    exec node "$here/claude-cost-tap.mjs" "$claude" "$@"
+fi
+exec "$claude" "$@"

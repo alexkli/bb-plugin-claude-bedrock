@@ -9,22 +9,37 @@
 //   usage, guided sign-in, OAuth token passthrough or fast mode;
 // - settings.define: the Bedrock settings come first, then Claude Code's own;
 // - rpc.register: dropped. Upstream only registers its claude.ai usage source,
-//   which reports on bb's built-in provider, not this one.
+//   which reports on bb's built-in provider, not this one. This plugin
+//   registers its own: estimated Bedrock spend from the cost ledger.
 // Bedrock itself is plain Claude Code configuration: this plugin gives the
 // provider CLAUDE_CODE_USE_BEDROCK, AWS_REGION, credentials and a plain claude
 // executable as environment.
 import { execFile } from "node:child_process";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import upstream from "./vendor/provider-claude-code/server";
-import { bedrockDeclaration, BEDROCK_SETTINGS, PROVIDER_ID } from "./src/declaration";
+import { bedrockDeclaration, BEDROCK_SETTINGS, DISPLAY_NAME, PROVIDER_ID } from "./src/declaration";
+import { registerBedrockUsage } from "./src/usage";
 
 type Declaration = Parameters<BbPluginApi["providers"]["register"]>[0];
 type SettingsHandle = ReturnType<BbPluginApi["settings"]["define"]>;
 
 const KEYCHAIN_SERVICE = "claude-bedrock-token";
+const PACKAGE_NAME = "bb-plugin-claude-bedrock";
+
+/** This plugin's root: the nearest folder up from the bundle with our package.json. */
+function findPluginDir(): string | null {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    const manifest = join(dir, "package.json");
+    if (existsSync(manifest) && readFileSync(manifest, "utf8").includes(`"${PACKAGE_NAME}"`)) return dir;
+    dir = dirname(dir);
+  }
+  return null;
+}
 
 /** `target` with some members replaced; everything else reads through, bound to `target`. */
 function withOverrides<T extends object>(target: T, overrides: Partial<Record<keyof T, unknown>>): T {
@@ -90,6 +105,13 @@ export default function plugin(bb: BbPluginApi) {
   );
   // Upstream always defines its settings; define ours if a future version stops.
   const handle = settings ?? bb.settings.define(BEDROCK_SETTINGS);
+  const pluginDir = findPluginDir();
+
+  registerBedrockUsage(bb, PROVIDER_ID, DISPLAY_NAME, async () => {
+    const values = (await handle.get()) as Record<string, unknown>;
+    const number = (name: string, fallback: number) => (typeof values[name] === "number" ? (values[name] as number) : fallback);
+    return { monthlyBudgetUsd: number("monthlyBudgetUsd", 100), priceFactor: number("priceFactor", 1) };
+  }, ["bb-claude-code"]);
 
   async function credentials(): Promise<{
     apiKey: string | null;
@@ -120,9 +142,19 @@ export default function plugin(bb: BbPluginApi) {
     ];
     if (apiKey) env.push({ name: "AWS_BEARER_TOKEN_BEDROCK", value: apiKey, reason: "Bedrock API key" });
     if (profile) env.push({ name: "AWS_PROFILE", value: profile, reason: "AWS profile from the plugin settings" });
-    // provider env wins over machine env: keep a machine-wide wrapper meant for
-    // bb's own Claude Code provider (e.g. one that switches backends) out of here
-    if (claude) env.push({ name: "BB_CLAUDE_CODE_EXECUTABLE", value: claude, reason: "Plain Claude Code for Bedrock" });
+    // Provider env wins over machine env, which keeps a machine-wide wrapper
+    // meant for bb's own Claude Code provider (e.g. one that switches backends)
+    // out of here. bin/claude-bedrock runs the real claude and records its cost
+    // for the usage entry.
+    if (claude) {
+      const wrapper = pluginDir === null ? null : join(pluginDir, "bin", "claude-bedrock");
+      if (wrapper !== null && existsSync(wrapper)) {
+        env.push({ name: "BB_CLAUDE_CODE_EXECUTABLE", value: wrapper, reason: "Claude Code with cost recording for Bedrock" });
+        env.push({ name: "CLAUDE_BEDROCK_CLAUDE", value: claude, reason: "Plain Claude Code for Bedrock" });
+      } else {
+        env.push({ name: "BB_CLAUDE_CODE_EXECUTABLE", value: claude, reason: "Plain Claude Code for Bedrock" });
+      }
+    }
     return env;
   });
 

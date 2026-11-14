@@ -17,7 +17,8 @@ Code reports:
 ![Model picker for Claude Code (Bedrock) listing us.anthropic Bedrock models](docs/models.png)
 
 The plugin settings: Bedrock API key, region, AWS profile, Claude Code
-executable, then bb's usual Claude Code options.
+executable, monthly budget and price factor, then bb's usual Claude Code
+options.
 
 ![Claude Bedrock provider settings](docs/settings.png)
 
@@ -51,6 +52,26 @@ executable, then bb's usual Claude Code options.
 
 3. Pick **Claude Code (Bedrock)** in a new thread.
 
+## Usage entry
+
+The plugin adds estimated spend for `claude-bedrock` to bb's Provider usage
+panel and footer: this month and today, against a monthly budget. Today's
+budget is the monthly budget divided by the days in the month.
+
+- **Monthly budget (USD)**, default 100.
+- **Price factor**, default 1 (list price). For a negotiated Bedrock discount
+  or markup, e.g. 0.8 for 20% below list.
+
+The numbers are Claude Code's own list-price cost estimates, not your AWS bill.
+bb doesn't show a cost for Claude Code threads, so the plugin records it
+itself: `bin/claude-bedrock` runs the real `claude` behind
+`bin/claude-cost-tap.mjs`, which passes Claude Code's output through unchanged
+and appends each session's running cost to
+`${XDG_STATE_HOME:-~/.local/state}/claude-bedrock/cost.jsonl` (src
+`bb-claude-code`). That ledger is shared with the Claude Bedrock ACP provider
+plugin; each plugin's entry counts its own lines. Recording needs Node.js on
+the machine; without it, `claude` runs directly and nothing is recorded.
+
 ## How it works
 
 `vendor/provider-claude-code` is bb's built-in Claude Code provider
@@ -66,17 +87,21 @@ This plugin's own code is small and sits outside `vendor/`:
   (`claude-bedrock`), name, icon and sign-in copy, and drops what only applies
   to a claude.ai login: guided sign-in, the claude.ai usage entry, the OAuth
   token passthrough and fast mode. The Bedrock settings come before Claude
-  Code's own settings.
+  Code's own settings. In place of upstream's claude.ai usage entry, the
+  plugin registers its own (`src/usage.ts`).
 - The server contributes this provider's environment: `CLAUDE_CODE_USE_BEDROCK=1`,
   `AWS_REGION`, the API key as `AWS_BEARER_TOKEN_BEDROCK` (or `AWS_PROFILE`),
-  and `BB_CLAUDE_CODE_EXECUTABLE` pointing at a plain `claude`, so a
+  and `BB_CLAUDE_CODE_EXECUTABLE` pointing at `bin/claude-bedrock`, which runs
+  a plain `claude` (`CLAUDE_BEDROCK_CLAUDE`) and records its cost. A
   machine-wide `BB_CLAUDE_CODE_EXECUTABLE` wrapper meant for bb's own Claude
   Code provider does not apply here.
 - `host.ts` re-exports upstream's host entry and bridge. bb sends the
   contributed environment with each model list request, but upstream's model
   probe uses the bridge process's environment only; the bridge applies the
   request's environment first, so the picker lists the Bedrock models.
-- `app.tsx` draws the provider icon: the Claude mark with an AWS badge.
+- `app.tsx` draws the provider icon: the Claude mark with an AWS badge, in
+  color. (The Claude Bedrock ACP provider plugin uses the same mark in
+  monochrome, so the two are easy to tell apart.)
 
 ## Staying in sync with bb
 

@@ -1,4 +1,5 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import { BUDGET_SETTINGS } from "./usage";
 
 type Declaration = Parameters<BbPluginApi["providers"]["register"]>[0];
 type Descriptors = Parameters<BbPluginApi["settings"]["define"]>[0];
@@ -31,6 +32,7 @@ export const BEDROCK_SETTINGS = {
     description:
       "Optional full path of the claude binary for this provider. Default: the first claude in ~/.local/bin, /opt/homebrew/bin, /usr/local/bin or PATH. A machine-wide BB_CLAUDE_CODE_EXECUTABLE (meant for bb's own Claude Code provider) is not used.",
   },
+  ...BUDGET_SETTINGS,
 } as const satisfies Descriptors;
 
 /**
