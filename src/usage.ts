@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { parseLedger, totals } from "./ledger";
+import { forAccount, parseLedger, totals } from "./ledger";
 
 const LEDGER = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "claude-bedrock", "cost.jsonl");
 const LIST_RESOURCES = "provider-usage.v1.listResources";
@@ -73,8 +73,8 @@ export function registerBedrockUsage(
   providerId: string,
   label: string,
   readBudget: () => Promise<{ monthlyBudgetUsd: number; priceFactor: number }>,
-  /** Ledger sources (src) this entry counts. */
-  sources: readonly string[],
+  /** The ledger's name (accountId) for the Bedrock credential the plugin currently uses. */
+  readAccount: () => Promise<string>,
 ): void {
   bb.rpc.register(usageRpcContract, {
     [LIST_RESOURCES]: async () => {
@@ -107,7 +107,7 @@ export function registerBedrockUsage(
       const discount = factor > 0 ? factor : 1;
       const budget = monthlyBudgetUsd > 0 ? monthlyBudgetUsd : 100;
       const now = new Date();
-      const t = totals(parseLedger(text).filter((e) => e.src !== undefined && sources.includes(e.src)), now);
+      const t = totals(forAccount(parseLedger(text), await readAccount()), now);
       const month = t.month * discount;
       const today = t.today * discount;
       const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();

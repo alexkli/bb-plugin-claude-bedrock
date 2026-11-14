@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import upstream from "./vendor/provider-claude-code/server";
 import { bedrockDeclaration, BEDROCK_SETTINGS, DISPLAY_NAME, PROVIDER_ID } from "./src/declaration";
+import { accountId } from "./src/ledger";
 import { registerBedrockUsage } from "./src/usage";
 
 type Declaration = Parameters<BbPluginApi["providers"]["register"]>[0];
@@ -111,7 +112,10 @@ export default function plugin(bb: BbPluginApi) {
     const values = (await handle.get()) as Record<string, unknown>;
     const number = (name: string, fallback: number) => (typeof values[name] === "number" ? (values[name] as number) : fallback);
     return { monthlyBudgetUsd: number("monthlyBudgetUsd", 100), priceFactor: number("priceFactor", 1) };
-  }, ["bb-claude-code"]);
+  }, async () => {
+    const { apiKey, profile } = await credentials();
+    return accountId(apiKey, profile);
+  });
 
   async function credentials(): Promise<{
     apiKey: string | null;

@@ -2,17 +2,41 @@
 // the Claude Bedrock ACP provider plugin (src "bb", from its ACP proxy), the
 // Claude Bedrock provider plugin (src "bb-claude-code", from its claude
 // wrapper) and optionally other tools (e.g. a Claude Code statusline for
-// terminal sessions, src "cli"). Each plugin's usage entry counts its own
-// sources.
-// Each line: { t: epoch ms, src, key, usd } where usd is Claude Code's running
-// list-price cost of one session (key) in one process.
-// The same file is in bb-plugin-acp-claude-bedrock and bb-plugin-claude-bedrock:
-// keep them in sync.
+// terminal sessions, src "cli").
+// Each line: { t: epoch ms, src, acct, key, usd } where usd is Claude Code's
+// running list-price cost of one session (key) in one process, and acct names
+// the Bedrock credential it was spent with (see accountId). A usage entry
+// counts the lines of the credential its plugin uses, from any source, so it
+// shows the spend of that Bedrock API key or AWS profile; lines from before
+// acct was recorded count for every credential.
+// The same file is in bb-plugin-acp-claude-bedrock and bb-plugin-claude-bedrock,
+// and the ledger writers (the ACP proxy, claude-cost-tap.mjs) compute acct the
+// same way: keep them in sync.
+import { createHash } from "node:crypto";
+
+/**
+ * The ledger's name for a Bedrock credential: "key:" and 12 hex characters of
+ * the API key's SHA-256 (never the key itself), else "profile:<name>", else
+ * "aws-chain".
+ */
+export function accountId(apiKey: string | null | undefined, profile: string | null | undefined): string {
+  const key = apiKey?.trim();
+  if (key) return `key:${createHash("sha256").update(key).digest("hex").slice(0, 12)}`;
+  const name = profile?.trim();
+  return name ? `profile:${name}` : "aws-chain";
+}
+
+/** The lines that count for a credential: its own, and those from before acct was recorded. */
+export function forAccount(entries: LedgerEntry[], acct: string): LedgerEntry[] {
+  return entries.filter((e) => e.acct === undefined || e.acct === acct);
+}
 
 export interface LedgerEntry {
   t: number;
   /** Writer of the line; absent in lines from before sources were recorded. */
   src?: string;
+  /** Credential the cost was spent with (see accountId); absent in older lines. */
+  acct?: string;
   key: string;
   usd: number;
 }
@@ -33,7 +57,13 @@ export function parseLedger(text: string): LedgerEntry[] {
     try {
       const e = JSON.parse(line) as Partial<LedgerEntry>;
       if (typeof e.t === "number" && typeof e.key === "string" && typeof e.usd === "number" && e.usd >= 0) {
-        entries.push({ t: e.t, key: e.key, usd: e.usd, ...(typeof e.src === "string" ? { src: e.src } : {}) });
+        entries.push({
+          t: e.t,
+          key: e.key,
+          usd: e.usd,
+          ...(typeof e.src === "string" ? { src: e.src } : {}),
+          ...(typeof e.acct === "string" ? { acct: e.acct } : {}),
+        });
       }
     } catch {
       // a torn or foreign line: skip it

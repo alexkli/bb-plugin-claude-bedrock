@@ -69,7 +69,12 @@ itself: `bin/claude-bedrock` runs the real `claude` behind
 and appends each session's running cost to
 `${XDG_STATE_HOME:-~/.local/state}/claude-bedrock/cost.jsonl` (src
 `bb-claude-code`). That ledger is shared with the Claude Bedrock ACP provider
-plugin; each plugin's entry counts its own lines. Recording needs Node.js on
+plugin and other tools. Each line names the Bedrock credential it was spent
+with: a 12-character SHA-256 fingerprint of the API key (never the key), or
+the AWS profile. The usage entry counts all lines for the credential this
+plugin uses, whatever wrote them, so the budget covers everything spent with
+that API key on this machine. Lines from before credentials were recorded
+count for every credential. Recording needs Node.js on
 the machine; without it, `claude` runs directly and nothing is recorded.
 
 ## How it works

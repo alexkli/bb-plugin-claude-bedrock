@@ -4,10 +4,11 @@
 // result messages. For each one whose total_cost_usd grew, it appends a line
 // to the Bedrock cost ledger
 // ($XDG_STATE_HOME/claude-bedrock/cost.jsonl, default ~/.local/state/...):
-//   { t: epoch ms, src: "bb-claude-code", key: <session id>:<pid>, usd: <running list-price USD> }
+//   { t: epoch ms, src: "bb-claude-code", acct: <credential>, key: <session id>:<pid>, usd: <running list-price USD> }
 // The ledger is shared with the Claude Bedrock ACP provider plugin and other
 // tools; the plugin's usage entry sums it. Ledger failures never touch the stream.
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,13 @@ import { join } from "node:path";
 const [claude, ...args] = process.argv.slice(2);
 const LEDGER_DIR = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "claude-bedrock");
 
+// the Bedrock credential, as the ledger names it (same as accountId in ledger.ts)
+const ACCT = (() => {
+  const key = process.env.AWS_BEARER_TOKEN_BEDROCK?.trim();
+  if (key) return `key:${createHash("sha256").update(key).digest("hex").slice(0, 12)}`;
+  const profile = process.env.AWS_PROFILE?.trim();
+  return profile ? `profile:${profile}` : "aws-chain";
+})();
 let ledger = mkdir(LEDGER_DIR, { recursive: true }).catch(() => {});
 const record = (entry) => {
   ledger = ledger.then(() => appendFile(join(LEDGER_DIR, "cost.jsonl"), `${JSON.stringify(entry)}\n`)).catch(() => {});
@@ -43,7 +51,7 @@ child.stdout.on("data", (chunk) => {
       const key = `${message.session_id}:${process.pid}`;
       if (lastCost.get(key) === usd) continue;
       lastCost.set(key, usd);
-      record({ t: Date.now(), src: "bb-claude-code", key, usd });
+      record({ t: Date.now(), src: "bb-claude-code", acct: ACCT, key, usd });
     } catch {
       // not a complete JSON line: ignore
     }
