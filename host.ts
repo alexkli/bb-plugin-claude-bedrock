@@ -9,9 +9,31 @@
 // models (or whatever a machine-wide BB_CLAUDE_CODE_EXECUTABLE wrapper
 // configures). This bridge process serves only this provider, so it applies
 // the request's envVars to its own environment before upstream handles it.
+//
+// Upstream names models from Anthropic API ids only; for Bedrock ids it falls
+// back to labels like "Sonnet". The bridge renames them in its model/list
+// responses (src/model-names.ts).
 import { experimental_providerBridge as upstreamBridge } from "./vendor/provider-claude-code/src/host";
+import { nameBedrockModels } from "./src/model-names";
 
 export { default } from "./vendor/provider-claude-code/src/host";
+
+/** Ids of model/list requests whose responses are still to be written. */
+const pendingModelLists = new Set<string | number>();
+
+/** A response line to a pending model/list request, with Bedrock model names; other lines unchanged. */
+export function renameModelListResponse(line: string, pending: Set<string | number>): string {
+  if (pending.size === 0 || !line.startsWith("{") || !line.includes('"result"')) return line;
+  try {
+    const message = JSON.parse(line) as { id?: unknown; result?: unknown };
+    const id = message.id;
+    if ((typeof id !== "string" && typeof id !== "number") || !pending.has(id) || message.result === undefined) return line;
+    pending.delete(id);
+    return `${JSON.stringify({ ...message, result: nameBedrockModels(message.result) })}${line.endsWith("\n") ? "\n" : ""}`;
+  } catch {
+    return line;
+  }
+}
 
 /** The envVars of a model/list request line, or null. */
 export function modelListEnvVars(line: string): Record<string, string> | null {
@@ -33,11 +55,23 @@ export const experimental_providerBridge: typeof upstreamBridge = {
   start: (context) => {
     // Bedrock even before the first request carries the contributed env
     process.env.CLAUDE_CODE_USE_BEDROCK = "1";
+    // upstream writes each JSON-RPC message as one line through process.stdout.write
+    const write = process.stdout.write.bind(process.stdout) as (chunk: unknown, ...rest: unknown[]) => boolean;
+    process.stdout.write = ((chunk: unknown, ...rest: unknown[]) =>
+      write(typeof chunk === "string" ? renameModelListResponse(chunk, pendingModelLists) : chunk, ...rest)) as typeof process.stdout.write;
     upstreamBridge.start?.(context);
   },
   handleLine: (line) => {
     const envVars = modelListEnvVars(line);
-    if (envVars !== null) Object.assign(process.env, envVars);
+    if (envVars !== null) {
+      Object.assign(process.env, envVars);
+      try {
+        const id = (JSON.parse(line) as { id?: unknown }).id;
+        if (typeof id === "string" || typeof id === "number") pendingModelLists.add(id);
+      } catch {
+        // modelListEnvVars parsed it already
+      }
+    }
     upstreamBridge.handleLine(line);
   },
 };

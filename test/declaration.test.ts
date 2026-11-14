@@ -71,3 +71,18 @@ describe("modelListEnvVars", () => {
     expect(modelListEnvVars(JSON.stringify({ method: "model/list", params: {} }))).toBeNull();
   });
 });
+
+import { renameModelListResponse } from "../host";
+
+describe("renameModelListResponse", () => {
+  it("renames only responses to pending model/list requests", () => {
+    const pending = new Set<string | number>([7]);
+    const response = `${JSON.stringify({ jsonrpc: "2.0", id: 7, result: { models: [{ model: "us.anthropic.claude-fable-5-2", displayName: "Fable" }], selectedOnlyModels: [] } })}\n`;
+    const other = `${JSON.stringify({ jsonrpc: "2.0", id: 8, result: { models: [{ model: "us.anthropic.claude-fable-5-2", displayName: "Fable" }] } })}\n`;
+    expect(renameModelListResponse(other, pending)).toBe(other);
+    const renamed = renameModelListResponse(response, pending);
+    expect(JSON.parse(renamed).result.models[0].displayName).toBe("Fable 5.2");
+    expect(renamed.endsWith("\n")).toBe(true);
+    expect(pending.size).toBe(0);
+  });
+});

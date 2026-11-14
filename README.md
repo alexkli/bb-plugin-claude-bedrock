@@ -12,9 +12,10 @@ meter. Only the backend differs.
 ## Screenshots
 
 **Claude Code (Bedrock)** in the model picker, with the Bedrock models Claude
-Code reports:
+Code reports, and its estimated spend in the Provider usage panel (bottom
+left):
 
-![Model picker for Claude Code (Bedrock) listing us.anthropic Bedrock models](docs/models.png)
+![Model picker for Claude Code (Bedrock) listing Fable 5.2, Sonnet 5.5, Opus 5.5 and other Bedrock models; the Provider usage panel shows this month and today against the budget](docs/models.png)
 
 The plugin settings: Bedrock API key, region, AWS profile, Claude Code
 executable, monthly budget and price factor, then bb's usual Claude Code
@@ -104,6 +105,10 @@ This plugin's own code is small and sits outside `vendor/`:
   contributed environment with each model list request, but upstream's model
   probe uses the bridge process's environment only; the bridge applies the
   request's environment first, so the picker lists the Bedrock models.
+  Upstream also names models from Anthropic API ids only; for Bedrock ids
+  (`us.anthropic.claude-sonnet-5-5`, `…-v1:0`) it falls back to labels like
+  "Sonnet", so the bridge renames them in its model list responses
+  (`src/model-names.ts`).
 - `app.tsx` draws the provider icon: the Claude mark with an AWS badge, in
   color. (The Claude Bedrock ACP provider plugin uses the same mark in
   monochrome, so the two are easy to tell apart.)
