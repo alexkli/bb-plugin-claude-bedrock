@@ -96,9 +96,14 @@ This plugin's own code is small and sits outside `vendor/`:
   Code's own settings. In place of upstream's claude.ai usage entry, the
   plugin registers its own (`src/usage.ts`).
 - The server contributes this provider's environment: `CLAUDE_CODE_USE_BEDROCK=1`,
-  `AWS_REGION`, the API key as `AWS_BEARER_TOKEN_BEDROCK` (or `AWS_PROFILE`),
-  and `BB_CLAUDE_CODE_EXECUTABLE` pointing at `bin/claude-bedrock`, which runs
-  a plain `claude` (`CLAUDE_BEDROCK_CLAUDE`) and records its cost. A
+  `AWS_REGION`, `AWS_PROFILE` if set, where to find the API key, and
+  `BB_CLAUDE_CODE_EXECUTABLE` pointing at `bin/claude-bedrock`. That wrapper
+  sets `AWS_BEARER_TOKEN_BEDROCK` from bb's file for the secret API key setting
+  (`CLAUDE_BEDROCK_KEY_FILE`) or the keychain item
+  (`CLAUDE_BEDROCK_KEYCHAIN_SERVICE`), runs a plain `claude`
+  (`CLAUDE_BEDROCK_CLAUDE`) and records its cost. The key itself never goes
+  through bb's provider environment, because bb records those values in each
+  thread's events. A
   machine-wide `BB_CLAUDE_CODE_EXECUTABLE` wrapper meant for bb's own Claude
   Code provider does not apply here.
 - `host.ts` re-exports upstream's host entry and bridge. bb sends the

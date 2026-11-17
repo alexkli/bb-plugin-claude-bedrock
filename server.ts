@@ -12,8 +12,9 @@
 //   which reports on bb's built-in provider, not this one. This plugin
 //   registers its own: estimated Bedrock spend from the cost ledger.
 // Bedrock itself is plain Claude Code configuration: this plugin gives the
-// provider CLAUDE_CODE_USE_BEDROCK, AWS_REGION, credentials and a plain claude
-// executable as environment.
+// provider CLAUDE_CODE_USE_BEDROCK, AWS_REGION and bin/claude-bedrock as the
+// claude executable, which sets the API key (from bb's secret file or the
+// keychain; never through bb's env, which bb records) and runs the real one.
 import { execFile } from "node:child_process";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -30,6 +31,7 @@ type SettingsHandle = ReturnType<BbPluginApi["settings"]["define"]>;
 
 const KEYCHAIN_SERVICE = "claude-bedrock-token";
 const PACKAGE_NAME = "bb-plugin-claude-bedrock";
+const PLUGIN_ID = "claude-bedrock";
 
 /** This plugin's root: the nearest folder up from the bundle with our package.json. */
 function findPluginDir(): string | null {
@@ -138,26 +140,50 @@ export default function plugin(bb: BbPluginApi) {
     return { apiKey: null, source: profile ? `AWS profile ${profile}` : "AWS credential chain", region, profile, claude };
   }
 
+  // bb's file for the secret apiKey setting: a 0600 file of the raw value
+  // (SDK: "Stored in a 0600 file under <dataDir>/plugins/<id>/secrets/"),
+  // deleted when the plugin is removed.
+  async function secretKeyPath(): Promise<string> {
+    let dataDir = process.env.BB_DATA_DIR ?? join(homedir(), ".bb");
+    try {
+      const config = await bb.sdk.system.config();
+      if (config.dataDir.length > 0) dataDir = config.dataDir;
+    } catch {
+      // keep the default
+    }
+    return join(dataDir, "plugins", PLUGIN_ID, "secrets", "apiKey");
+  }
+
+  // Never the key itself: bb reports contributed values as-is in each
+  // thread's provider.env-resolved event, which it stores. bin/claude-bedrock
+  // reads the key from the settings' secret file or the keychain instead.
   bb.providers.experimental_contributeEnv(PROVIDER_ID, async () => {
-    const { apiKey, region, profile, claude } = await credentials();
+    const values = (await handle.get()) as Record<string, unknown>;
+    const text = (name: string) => (typeof values[name] === "string" ? (values[name] as string).trim() : "");
+    const region = text("region") || "us-east-1";
+    const profile = text("awsProfile");
+    const claude = text("claudeExecutable") || findClaude();
     const env = [
       { name: "CLAUDE_CODE_USE_BEDROCK", value: "1", reason: "Run Claude Code against Amazon Bedrock" },
       { name: "AWS_REGION", value: region, reason: "Bedrock region from the plugin settings" },
     ];
-    if (apiKey) env.push({ name: "AWS_BEARER_TOKEN_BEDROCK", value: apiKey, reason: "Bedrock API key" });
+    if (text("apiKey")) {
+      env.push({ name: "CLAUDE_BEDROCK_KEY_FILE", value: await secretKeyPath(), reason: "Bedrock API key (bb's file for the secret setting)" });
+    } else {
+      env.push({ name: "CLAUDE_BEDROCK_KEYCHAIN_SERVICE", value: KEYCHAIN_SERVICE, reason: "Bedrock API key from the macOS keychain, if present" });
+    }
     if (profile) env.push({ name: "AWS_PROFILE", value: profile, reason: "AWS profile from the plugin settings" });
     // Provider env wins over machine env, which keeps a machine-wide wrapper
     // meant for bb's own Claude Code provider (e.g. one that switches backends)
-    // out of here. bin/claude-bedrock runs the real claude and records its cost
-    // for the usage entry.
-    if (claude) {
-      const wrapper = pluginDir === null ? null : join(pluginDir, "bin", "claude-bedrock");
-      if (wrapper !== null && existsSync(wrapper)) {
-        env.push({ name: "BB_CLAUDE_CODE_EXECUTABLE", value: wrapper, reason: "Claude Code with cost recording for Bedrock" });
-        env.push({ name: "CLAUDE_BEDROCK_CLAUDE", value: claude, reason: "Plain Claude Code for Bedrock" });
-      } else {
-        env.push({ name: "BB_CLAUDE_CODE_EXECUTABLE", value: claude, reason: "Plain Claude Code for Bedrock" });
-      }
+    // out of here. bin/claude-bedrock sets the API key, runs the real claude
+    // and records its cost for the usage entry.
+    const wrapper = pluginDir === null ? null : join(pluginDir, "bin", "claude-bedrock");
+    if (wrapper !== null && existsSync(wrapper)) {
+      env.push({ name: "BB_CLAUDE_CODE_EXECUTABLE", value: wrapper, reason: "Claude Code with the Bedrock API key and cost recording" });
+      if (claude) env.push({ name: "CLAUDE_BEDROCK_CLAUDE", value: claude, reason: "Plain Claude Code for Bedrock" });
+    } else {
+      bb.log.warn(`bin/claude-bedrock not found; Claude Code runs without the Bedrock API key (AWS credential chain only)`);
+      if (claude) env.push({ name: "BB_CLAUDE_CODE_EXECUTABLE", value: claude, reason: "Plain Claude Code for Bedrock" });
     }
     return env;
   });

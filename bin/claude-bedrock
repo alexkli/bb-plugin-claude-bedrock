@@ -4,10 +4,23 @@
 # real claude as CLAUDE_BEDROCK_CLAUDE. With Node.js available, claude runs
 # behind claude-cost-tap.mjs, which records each session's cost in the Bedrock
 # cost ledger for the plugin's usage entry; without it, claude runs directly.
+#
+# The Bedrock API key comes from here, not from bb's provider environment
+# (bb records that in each thread's events): AWS_BEARER_TOKEN_BEDROCK if
+# already set, else the file CLAUDE_BEDROCK_KEY_FILE (bb's file for the secret
+# setting), else the macOS keychain item CLAUDE_BEDROCK_KEYCHAIN_SERVICE.
 set -euo pipefail
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 claude="${CLAUDE_BEDROCK_CLAUDE:-claude}"
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+if [[ -z "${AWS_BEARER_TOKEN_BEDROCK:-}" ]]; then
+    if [[ -n "${CLAUDE_BEDROCK_KEY_FILE:-}" && -r "$CLAUDE_BEDROCK_KEY_FILE" ]]; then
+        AWS_BEARER_TOKEN_BEDROCK="$(tr -d '[:space:]' <"$CLAUDE_BEDROCK_KEY_FILE")"
+    elif [[ -n "${CLAUDE_BEDROCK_KEYCHAIN_SERVICE:-}" ]] && command -v security >/dev/null; then
+        AWS_BEARER_TOKEN_BEDROCK="$(security find-generic-password -a "$USER" -s "$CLAUDE_BEDROCK_KEYCHAIN_SERVICE" -w 2>/dev/null || true)"
+    fi
+    [[ -n "${AWS_BEARER_TOKEN_BEDROCK:-}" ]] && export AWS_BEARER_TOKEN_BEDROCK
+fi
 if command -v node >/dev/null; then
     exec node "$here/claude-cost-tap.mjs" "$claude" "$@"
 fi
