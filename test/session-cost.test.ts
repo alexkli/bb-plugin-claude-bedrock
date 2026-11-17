@@ -45,4 +45,13 @@ describe("session cost in the context-window popup", () => {
     expect(withSessionCost(other, state, () => 3)).toBe(other);
     expect(withSessionCost("not json", state, () => 3)).toBe("not json");
   });
+
+  it("learns the session from a context snapshot when thread/identity was missed (plugin reloaded mid-thread)", () => {
+    const state = new SessionCostState();
+    const costOf = (id: string) => (id === SESSION ? 2 : null);
+    const line = delta([{ ...contextWindow, snapshot: { providerSessionId: SESSION, usedTokens: 1000 } }]);
+    expect(JSON.parse(withSessionCost(line, state, costOf)).params.deltas[0].cost).toEqual({ amount: 2, currency: "USD" });
+    // later deltas without a snapshot get it too
+    expect(JSON.parse(withSessionCost(delta([contextWindow]), state, costOf)).params.deltas[0].cost).toEqual({ amount: 2, currency: "USD" });
+  });
 });

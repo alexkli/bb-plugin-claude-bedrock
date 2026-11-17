@@ -95,9 +95,20 @@ export class SessionCostState {
   }
 }
 
+/** The session id of a contextWindow delta's snapshot, if any. */
+function snapshotSessionId(deltas: unknown[]): string | undefined {
+  for (const delta of deltas) {
+    if (!isObject(delta) || delta.kind !== "contextWindow" || !isObject(delta.snapshot)) continue;
+    const id = delta.snapshot.providerSessionId;
+    if (typeof id === "string" && id !== "") return id;
+  }
+  return undefined;
+}
+
 /**
  * A bridge -> bb line with the session cost added to its contextWindow deltas;
- * thread/identity lines teach the thread's session id. Other lines unchanged.
+ * thread/identity lines (or, failing that, a delta's context snapshot) teach
+ * the thread's session id. Other lines unchanged.
  */
 export function withSessionCost(line: string, state: SessionCostState, costOf: (sessionId: string) => number | null): string {
   const identity = line.includes('"thread/identity"');
@@ -112,7 +123,13 @@ export function withSessionCost(line: string, state: SessionCostState, costOf: (
       return line;
     }
     if (message.method !== "thread/delta" || !Array.isArray(params.deltas)) return line;
-    const sessionId = state.sessions.get(threadId);
+    // thread/identity comes once per session start, so after a plugin reload a
+    // running thread's session is known only from its context snapshot.
+    let sessionId = state.sessions.get(threadId);
+    if (sessionId === undefined) {
+      sessionId = snapshotSessionId(params.deltas);
+      if (sessionId !== undefined) state.sessions.set(threadId, sessionId);
+    }
     const listPrice = sessionId === undefined ? null : costOf(sessionId);
     if (listPrice === null) return line;
     const amount = listPrice * (state.priceFactors.get(threadId) ?? 1);
