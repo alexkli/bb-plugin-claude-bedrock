@@ -9,7 +9,7 @@
 // tools; the plugin's usage entry sums it. Ledger failures never touch the stream.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -23,9 +23,16 @@ const ACCT = (() => {
   const profile = process.env.AWS_PROFILE?.trim();
   return profile ? `profile:${profile}` : "aws-chain";
 })();
-let ledger = mkdir(LEDGER_DIR, { recursive: true }).catch(() => {});
+// Synchronous, before the chunk goes on: the plugin's provider bridge reads the
+// ledger when it reports the result to bb (the session cost in the
+// context-window popup), so the line must be there first.
 const record = (entry) => {
-  ledger = ledger.then(() => appendFile(join(LEDGER_DIR, "cost.jsonl"), `${JSON.stringify(entry)}\n`)).catch(() => {});
+  try {
+    mkdirSync(LEDGER_DIR, { recursive: true });
+    appendFileSync(join(LEDGER_DIR, "cost.jsonl"), `${JSON.stringify(entry)}\n`);
+  } catch {
+    // never touch the stream
+  }
 };
 
 const child = spawn(claude, args, { stdio: ["inherit", "pipe", "inherit"] });
@@ -36,7 +43,6 @@ for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
 const lastCost = new Map();
 let pending = "";
 child.stdout.on("data", (chunk) => {
-  process.stdout.write(chunk);
   pending += chunk.toString("utf8");
   let newline = pending.indexOf("\n");
   while (newline >= 0) {
@@ -56,18 +62,21 @@ child.stdout.on("data", (chunk) => {
       // not a complete JSON line: ignore
     }
   }
+  process.stdout.write(chunk);
 });
 
 child.on("error", (error) => {
   process.stderr.write(`claude-bedrock: could not start ${claude}: ${error.message}\n`);
   process.exit(127);
 });
-child.on("exit", (code, signal) => {
-  ledger.finally(() => {
+// "close": after Claude Code exited and its stdout ended; then exit once ours is flushed
+child.on("close", (code, signal) => {
+  const finish = () => {
     if (signal) {
       process.removeAllListeners(signal);
       process.kill(process.pid, signal);
-    }
-    else process.exit(code ?? 0);
-  });
+    } else process.exit(code ?? 0);
+  };
+  if (process.stdout.writableLength > 0) process.stdout.once("drain", finish);
+  else finish();
 });

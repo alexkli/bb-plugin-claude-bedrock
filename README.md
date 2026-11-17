@@ -61,11 +61,15 @@ budget is the monthly budget divided by the days in the month.
 
 - **Monthly budget (USD)**, default 100.
 - **Price factor**, default 1 (list price). For a negotiated Bedrock discount
-  or markup, e.g. 0.8 for 20% below list.
+  or markup, e.g. 0.8 for 20% below list. It also applies to the session cost
+  in each thread.
+
+Each thread also shows its own cost: the context-window indicator under the
+prompt lists it as **Session cost** in its popup, updated after every turn
+(the session's running cost from the ledger below, times the price factor).
 
 The numbers are Claude Code's own list-price cost estimates, not your AWS bill.
-bb doesn't show a cost for Claude Code threads, so the plugin records it
-itself: `bin/claude-bedrock` runs the real `claude` behind
+bb's Claude Code bridge reports no cost, so the plugin records it itself: `bin/claude-bedrock` runs the real `claude` behind
 `bin/claude-cost-tap.mjs`, which passes Claude Code's output through unchanged
 and appends each session's running cost to
 `${XDG_STATE_HOME:-~/.local/state}/claude-bedrock/cost.jsonl` (src

@@ -173,6 +173,8 @@ export default function plugin(bb: BbPluginApi) {
       env.push({ name: "CLAUDE_BEDROCK_KEYCHAIN_SERVICE", value: KEYCHAIN_SERVICE, reason: "Bedrock API key from the macOS keychain, if present" });
     }
     if (profile) env.push({ name: "AWS_PROFILE", value: profile, reason: "AWS profile from the plugin settings" });
+    const factor = typeof values.priceFactor === "number" && values.priceFactor > 0 ? values.priceFactor : 1;
+    env.push({ name: "CLAUDE_BEDROCK_PRICE_FACTOR", value: String(factor), reason: "Price factor for the session cost in the context-window popup" });
     // Provider env wins over machine env, which keeps a machine-wide wrapper
     // meant for bb's own Claude Code provider (e.g. one that switches backends)
     // out of here. bin/claude-bedrock sets the API key, runs the real claude

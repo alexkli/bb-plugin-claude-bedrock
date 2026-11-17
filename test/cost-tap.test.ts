@@ -33,6 +33,32 @@ describe("claude-cost-tap", () => {
     expect(ledger.every((e) => e.acct === accountId("test-key", null))).toBe(true);
   });
 
+  it("records a result's cost before passing the result on", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cost-tap-order-"));
+    const result = JSON.stringify({ type: "result", session_id: "s2", total_cost_usd: 0.75 });
+    const fake = join(dir, "fake-claude");
+    writeFileSync(fake, `#!/bin/sh\necho '${result}'\n`);
+    chmodSync(fake, 0o755);
+    // the reader sees the result line, then checks the ledger right away
+    const reader = join(dir, "reader.mjs");
+    writeFileSync(
+      reader,
+      `import { readFileSync } from "node:fs";
+process.stdin.once("data", () => {
+  let ledger = "";
+  try { ledger = readFileSync(process.argv[2], "utf8"); } catch {}
+  process.stdout.write(ledger.includes('"usd":0.75') ? "recorded" : "missing");
+  process.exit(0);
+});`,
+    );
+    const ledger = join(dir, "claude-bedrock", "cost.jsonl");
+    const run = spawnSync("/bin/sh", ["-c", `"${process.execPath}" "${TAP}" "${fake}" | "${process.execPath}" "${reader}" "${ledger}"`], {
+      env: { ...process.env, XDG_STATE_HOME: dir },
+      encoding: "utf8",
+    });
+    expect(run.stdout).toBe("recorded");
+  });
+
   it("exits with the child's status", () => {
     const run = spawnSync(process.execPath, [TAP, "/bin/sh", "-c", "exit 3"], { encoding: "utf8" });
     expect(run.status).toBe(3);

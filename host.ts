@@ -10,13 +10,23 @@
 // configures). This bridge process serves only this provider, so it applies
 // the request's envVars to its own environment before upstream handles it.
 //
+// Upstream reports no cost; the bridge adds Claude Code's session cost (times
+// the price factor) to its contextWindow deltas, which bb shows as "Session
+// cost" in the context-window popup (src/session-cost.ts).
+//
 // Upstream names models from Anthropic API ids only; for Bedrock ids it falls
 // back to labels like "Sonnet". The bridge renames them in its model/list
 // responses (src/model-names.ts).
 import { experimental_providerBridge as upstreamBridge } from "./vendor/provider-claude-code/src/host";
 import { nameBedrockModels } from "./src/model-names";
+import { LedgerCosts, SessionCostState, withSessionCost } from "./src/session-cost";
 
 export { default } from "./vendor/provider-claude-code/src/host";
+
+// bb's context-window popup shows "Session cost" when a contextWindow delta
+// carries one; upstream's never do (src/session-cost.ts)
+const costs = new LedgerCosts();
+const costState = new SessionCostState();
 
 /** Ids of model/list requests whose responses are still to be written. */
 const pendingModelLists = new Set<string | number>();
@@ -58,10 +68,16 @@ export const experimental_providerBridge: typeof upstreamBridge = {
     // upstream writes each JSON-RPC message as one line through process.stdout.write
     const write = process.stdout.write.bind(process.stdout) as (chunk: unknown, ...rest: unknown[]) => boolean;
     process.stdout.write = ((chunk: unknown, ...rest: unknown[]) =>
-      write(typeof chunk === "string" ? renameModelListResponse(chunk, pendingModelLists) : chunk, ...rest)) as typeof process.stdout.write;
+      write(
+        typeof chunk === "string"
+          ? withSessionCost(renameModelListResponse(chunk, pendingModelLists), costState, (id) => costs.costOf(id))
+          : chunk,
+        ...rest,
+      )) as typeof process.stdout.write;
     upstreamBridge.start?.(context);
   },
   handleLine: (line) => {
+    costState.noteRequest(line);
     const envVars = modelListEnvVars(line);
     if (envVars !== null) {
       Object.assign(process.env, envVars);
