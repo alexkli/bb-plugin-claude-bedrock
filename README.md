@@ -17,9 +17,10 @@ left):
 
 ![Model picker for Claude Code (Bedrock) listing Fable 5.2, Sonnet 5.5, Opus 5.5 and other Bedrock models; the Provider usage panel shows this month and today against the budget](docs/models.png)
 
-The plugin settings: Bedrock API key, region, AWS profile, Claude Code
-executable, monthly budget and price factor, then bb's usual Claude Code
-options.
+The plugin settings are organized into four sections: **AWS Bedrock** (API key,
+region, AWS profile), **Usage** (monthly budget and price factor), **Claude
+Code** (bb's standard Claude Code options), and **Additional options**
+(**Prompt on sandbox escape**).
 
 ![Claude Bedrock provider settings](docs/settings.png)
 
@@ -45,7 +46,8 @@ options.
    ```
 
 2. Open Settings → Plugins → **Claude Bedrock provider** and set:
-   - **Bedrock API key**. bb stores it as a secret setting. Without it, the
+   - **Bedrock API key**. Stored in a `0600` secret file (never in the database
+     or sent back to the frontend). Without it, the
      plugin uses the macOS keychain item `claude-bedrock-token` if present
      (`security add-generic-password -a "$USER" -s claude-bedrock-token -w`),
      else the normal AWS credential chain; set **AWS profile** for that.
@@ -93,16 +95,17 @@ public packages only.
 This plugin's own code is small and sits outside `vendor/`:
 
 - `server.ts` runs the upstream plugin with a slightly changed plugin API
-  instead of patching it. `src/declaration.ts` gives the provider its own id
-  (`claude-bedrock`), name, icon and sign-in copy, and drops what only applies
-  to a claude.ai login: guided sign-in, the claude.ai usage entry, the OAuth
-  token passthrough and fast mode. The Bedrock settings come before Claude
-  Code's own settings. In place of upstream's claude.ai usage entry, the
-  plugin registers its own (`src/usage.ts`).
+  instead of patching its `server.ts`. `src/declaration.ts` gives the provider
+  its own id (`claude-bedrock`), name, icon and sign-in copy, and drops what
+  only applies to a claude.ai login: guided sign-in, the claude.ai usage entry,
+  the OAuth token passthrough and fast mode. Upstream's settings are kept in
+  `src/settings.ts` and rendered in their own section in `app.tsx` alongside the
+  AWS Bedrock, Usage, and Additional options sections. In place of upstream's
+  claude.ai usage entry, the plugin registers its own (`src/usage.ts`).
 - The server contributes this provider's environment: `CLAUDE_CODE_USE_BEDROCK=1`,
   `AWS_REGION`, `AWS_PROFILE` if set, where to find the API key, and
   `BB_CLAUDE_CODE_EXECUTABLE` pointing at `bin/claude-bedrock`. That wrapper
-  sets `AWS_BEARER_TOKEN_BEDROCK` from bb's file for the secret API key setting
+  sets `AWS_BEARER_TOKEN_BEDROCK` from the `0600` secret file
   (`CLAUDE_BEDROCK_KEY_FILE`) or the keychain item
   (`CLAUDE_BEDROCK_KEYCHAIN_SERVICE`), runs a plain `claude`
   (`CLAUDE_BEDROCK_CLAUDE`) and records its cost. The key itself never goes
@@ -118,9 +121,19 @@ This plugin's own code is small and sits outside `vendor/`:
   (`us.anthropic.claude-sonnet-5-5`, `…-v1:0`) it falls back to labels like
   "Sonnet", so the bridge renames them in its model list responses
   (`src/model-names.ts`).
-- `app.tsx` draws the provider icon: the Claude mark with an AWS badge, in
-  color. (The Claude Bedrock ACP provider plugin uses the same mark in
-  monochrome, so the two are easy to tell apart.)
+- `app.tsx` draws the provider icon (the Claude mark with an AWS badge, in
+  color; the Claude Bedrock ACP provider plugin uses the same mark in
+  monochrome, so the two are easy to tell apart) and renders the plugin's
+  settings sections (**AWS Bedrock**, **Usage**, **Claude Code**, and
+  **Additional options**).
+- **Prompt on sandbox escape.** Optional setting (off by default) under
+  **Additional options** that passes
+  `permissions.ask: ["Bash(dangerouslyDisableSandbox:true)"]` via SDK flag
+  settings when the Claude Code sandbox is active, so Approve for me mode
+  prompts you instead of letting Claude Code's auto-mode classifier approve
+  unsandboxed retries. Plumbed through `vendor/provider-claude-code`
+  (`src/session-params.ts`, `src/bridge/commands.ts`,
+  `src/bridge/session-options.ts`, `src/bridge/bridge.ts`).
 
 ## Staying in sync with bb
 

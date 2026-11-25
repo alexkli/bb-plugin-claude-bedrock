@@ -1,5 +1,5 @@
 // The host entry and provider bridge are bb's Claude Code ones. Threads get the
-// Bedrock settings (region, credentials, Claude Code executable) from the
+// Bedrock settings (region, credentials) from the
 // environment the server contributes for this provider (see server.ts), which
 // bb passes with each session.
 //

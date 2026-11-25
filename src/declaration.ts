@@ -1,46 +1,22 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
-import { BUDGET_SETTINGS } from "./usage";
 
 type Declaration = Parameters<BbPluginApi["providers"]["register"]>[0];
-type Descriptors = Parameters<BbPluginApi["settings"]["define"]>[0];
+type DeriveContext = { settings: Record<string, unknown> } & Record<string, unknown>;
 
 export const PROVIDER_ID = "claude-bedrock";
 export const DISPLAY_NAME = "Claude Code (Bedrock)";
 
-export const BEDROCK_SETTINGS = {
-  apiKey: {
-    type: "string",
-    secret: true,
-    label: "Bedrock API key",
-    description:
-      'Amazon Bedrock API key. Optional: without it, the plugin uses the macOS keychain item "claude-bedrock-token" if present, else the normal AWS credential chain (AWS profile, SSO, ...).',
-  },
-  region: {
-    type: "string",
-    label: "AWS region",
-    description: "Bedrock region, e.g. us-east-1 or us-west-2.",
-    default: "us-east-1",
-  },
-  awsProfile: {
-    type: "string",
-    label: "AWS profile",
-    description: "Optional AWS profile for the AWS credential chain, used when no API key is set.",
-  },
-  claudeExecutable: {
-    type: "string",
-    label: "Claude Code executable",
-    description:
-      "Optional full path of the claude binary for this provider. Default: the first claude in ~/.local/bin, /opt/homebrew/bin, /usr/local/bin or PATH. A machine-wide BB_CLAUDE_CODE_EXECUTABLE (meant for bb's own Claude Code provider) is not used.",
-  },
-  ...BUDGET_SETTINGS,
-} as const satisfies Descriptors;
+export interface BedrockDeclarationOptions {
+  claudeSettings?: () => Record<string, unknown>;
+  promptOnSandboxEscape?: () => boolean;
+}
 
 /**
  * bb's Claude Code provider declaration, turned into this provider's. Everything
  * not listed here (capabilities, reasoning levels, native roots, provider
  * options) stays as upstream declares it.
  */
-export function bedrockDeclaration(upstream: Declaration): Declaration {
+export function bedrockDeclaration(upstream: Declaration, options: BedrockDeclarationOptions = {}): Declaration {
   const declaration: Record<string, unknown> = { ...upstream };
   // internal flag for bb's own sign-in flow; Bedrock has no claude.ai sign-in
   delete declaration.internal_DO_NOT_USE_guidedSignIn;
@@ -48,6 +24,7 @@ export function bedrockDeclaration(upstream: Declaration): Declaration {
   delete declaration.serviceTiers;
 
   const upstreamEnv = (upstream as { env?: { passthrough?: string[] } }).env;
+  const derive = declaration.deriveProviderOptions as ((ctx: DeriveContext) => unknown) | undefined;
   return {
     ...(declaration as unknown as Declaration),
     id: PROVIDER_ID,
@@ -66,5 +43,18 @@ export function bedrockDeclaration(upstream: Declaration): Declaration {
       ...upstreamEnv,
       passthrough: (upstreamEnv?.passthrough ?? []).filter((name) => name !== "CLAUDE_CODE_OAUTH_TOKEN"),
     },
+    // Upstream reads its settings only here; give it the plugin-kept values
+    // plus our promptOnSandboxEscape option.
+    ...(derive
+      ? {
+          deriveProviderOptions: (ctx: DeriveContext) => ({
+            ...(derive({
+              ...ctx,
+              settings: { ...ctx.settings, ...(options.claudeSettings?.() ?? {}) },
+            }) as Record<string, unknown>),
+            promptOnSandboxEscape: options.promptOnSandboxEscape?.() ?? false,
+          }),
+        }
+      : {}),
   } as unknown as Declaration;
 }

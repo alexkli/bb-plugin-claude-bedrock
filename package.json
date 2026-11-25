@@ -1,7 +1,7 @@
 {
   "name": "bb-plugin-claude-bedrock",
-  "version": "0.1.3",
-  "description": "Run Claude Code threads on your AWS Bedrock account, with all of bb's native Claude Code features.",
+  "version": "1.0.0",
+  "description": "Run Claude Code threads on your AWS Bedrock account",
   "keywords": [
     "bb-plugin",
     "claude-code",
@@ -22,7 +22,7 @@
   },
   "bb": {
     "name": "Claude Bedrock provider",
-    "description": "Run Claude Code threads on your AWS Bedrock account, with all of bb's native Claude Code features.",
+    "description": "Run Claude Code threads on your AWS Bedrock account",
     "branding": {
       "icon": "./assets/logo.svg"
     },

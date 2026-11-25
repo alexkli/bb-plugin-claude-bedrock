@@ -2,18 +2,24 @@
 // bb's normal Claude Code provider.
 //
 // vendor/provider-claude-code is bb's built-in Claude Code provider, copied
-// verbatim (see vendor/UPSTREAM and scripts/sync-upstream.sh). This file runs
-// that plugin with a slightly changed plugin API instead of patching it, so an
-// upstream sync is a folder replace:
+// verbatim (see vendor/UPSTREAM and scripts/sync-upstream.sh) with minimal
+// additions for promptOnSandboxEscape. This file runs that plugin with a
+// slightly changed plugin API instead of patching its server.ts, so an
+// upstream sync stays straightforward:
 // - providers.register: own id, name, icon and sign-in copy; no claude.ai
-//   usage, guided sign-in, OAuth token passthrough or fast mode;
-// - settings.define: the Bedrock settings come first, then Claude Code's own;
+//   usage, guided sign-in, OAuth token passthrough or fast mode; forwards
+//   plugin-kept Claude Code settings and promptOnSandboxEscape via
+//   deriveProviderOptions;
+// - settings.define: intercepted and kept by this plugin (src/settings.ts),
+//   rendered in its own Claude Code section alongside AWS Bedrock, Usage, and
+//   Additional options sections in app.tsx;
 // - rpc.register: dropped. Upstream only registers its claude.ai usage source,
 //   which reports on bb's built-in provider, not this one. This plugin
-//   registers its own: estimated Bedrock spend from the cost ledger.
+//   registers its own: estimated Bedrock spend from the cost ledger, plus the
+//   settings RPC for app.tsx.
 // Bedrock itself is plain Claude Code configuration: this plugin gives the
 // provider CLAUDE_CODE_USE_BEDROCK, AWS_REGION and bin/claude-bedrock as the
-// claude executable, which sets the API key (from bb's secret file or the
+// claude executable, which sets the API key (from the 0600 secret file or the
 // keychain; never through bb's env, which bb records) and runs the real one.
 import { execFile } from "node:child_process";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
@@ -22,12 +28,13 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import upstream from "./vendor/provider-claude-code/server";
-import { bedrockDeclaration, BEDROCK_SETTINGS, DISPLAY_NAME, PROVIDER_ID } from "./src/declaration";
+import { appContract, type SettingsView } from "./src/contract";
+import { bedrockDeclaration, DISPLAY_NAME, PROVIDER_ID } from "./src/declaration";
 import { accountId } from "./src/ledger";
+import { readSecretApiKey, SettingsStore, writeSecretApiKey } from "./src/settings";
 import { registerBedrockUsage } from "./src/usage";
 
 type Declaration = Parameters<BbPluginApi["providers"]["register"]>[0];
-type SettingsHandle = ReturnType<BbPluginApi["settings"]["define"]>;
 
 const KEYCHAIN_SERVICE = "claude-bedrock-token";
 const PACKAGE_NAME = "bb-plugin-claude-bedrock";
@@ -89,91 +96,139 @@ function keychainToken(): Promise<string | null> {
   });
 }
 
-export default function plugin(bb: BbPluginApi) {
-  let settings: SettingsHandle | null = null;
+export default async function plugin(bb: BbPluginApi) {
+  const settings = new SettingsStore(bb);
+  await settings.load();
 
   upstream(
     withOverrides(bb, {
       providers: withOverrides(bb.providers, {
-        register: (declaration: Declaration) => bb.providers.register(bedrockDeclaration(declaration)),
+        register: (declaration: Declaration) =>
+          bb.providers.register(
+            bedrockDeclaration(declaration, {
+              claudeSettings: () => settings.claudeValues(),
+              promptOnSandboxEscape: () => settings.bedrock().promptOnSandboxEscape,
+            }),
+          ),
       }),
       settings: withOverrides(bb.settings, {
-        define: (descriptors: Parameters<BbPluginApi["settings"]["define"]>[0]) => {
-          settings = bb.settings.define({ ...BEDROCK_SETTINGS, ...descriptors });
-          return settings;
+        // Keep upstream's settings ourselves so app.tsx renders them in their own section.
+        define: (descriptors: Record<string, unknown>) => {
+          settings.setClaudeDescriptors(descriptors);
+          return {
+            get: async () => settings.claudeValues(),
+            experimental_set: async (values: Record<string, unknown>) => {
+              for (const [key, value] of Object.entries(values)) {
+                if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+                  await settings.setClaude(key, value);
+                }
+              }
+              return settings.claudeValues();
+            },
+            onChange: (listener: () => void) => settings.onChange(listener),
+          };
         },
       }),
       rpc: withOverrides(bb.rpc, { register: () => undefined }),
     }),
   );
-  // Upstream always defines its settings; define ours if a future version stops.
-  const handle = settings ?? bb.settings.define(BEDROCK_SETTINGS);
+
   const pluginDir = findPluginDir();
 
-  registerBedrockUsage(bb, PROVIDER_ID, DISPLAY_NAME, async () => {
-    const values = (await handle.get()) as Record<string, unknown>;
-    const number = (name: string, fallback: number) => (typeof values[name] === "number" ? (values[name] as number) : fallback);
-    return { monthlyBudgetUsd: number("monthlyBudgetUsd", 100), priceFactor: number("priceFactor", 1) };
-  }, async () => {
-    const { apiKey, profile } = await credentials();
-    return accountId(apiKey, profile);
+  // 0600 file for the secret Bedrock API key (same path bb uses for secret
+  // settings, so existing keys stay intact and are deleted if the plugin is removed).
+  async function secretKeyPath(): Promise<string> {
+    let dataDir = bb.server.experimental_dataDir || process.env.BB_DATA_DIR || join(homedir(), ".bb");
+    if (!bb.server.experimental_dataDir) {
+      try {
+        const config = await bb.sdk.system.config();
+        if (config.dataDir.length > 0) dataDir = config.dataDir;
+      } catch {
+        // keep the default
+      }
+    }
+    return join(dataDir, "plugins", bb.pluginId || PLUGIN_ID, "secrets", "apiKey");
+  }
+
+  async function settingsView(): Promise<SettingsView> {
+    const apiKey = await readSecretApiKey(await secretKeyPath());
+    return {
+      bedrock: settings.bedrock(),
+      apiKeySet: apiKey !== null,
+      claudeFields: settings.claudeFields,
+      claudeValues: settings.claudeValues(),
+    };
+  }
+
+  bb.rpc.register(appContract, {
+    getSettings: () => settingsView(),
+    setBedrockSettings: async (patch) => {
+      await settings.setBedrock(patch);
+      return settingsView();
+    },
+    setApiKey: async ({ apiKey }) => {
+      await writeSecretApiKey(await secretKeyPath(), apiKey);
+      return settingsView();
+    },
+    setClaudeSetting: async ({ key, value }) => {
+      await settings.setClaude(key, value);
+      return settingsView();
+    },
   });
+
+  registerBedrockUsage(
+    bb,
+    PROVIDER_ID,
+    DISPLAY_NAME,
+    async () => {
+      const { monthlyBudgetUsd, priceFactor } = settings.bedrock();
+      return { monthlyBudgetUsd, priceFactor };
+    },
+    async () => {
+      const { apiKey, profile } = await credentials();
+      return accountId(apiKey, profile);
+    },
+  );
 
   async function credentials(): Promise<{
     apiKey: string | null;
     source: string;
     region: string;
     profile: string;
-    claude: string | null;
   }> {
-    const values = (await handle.get()) as Record<string, unknown>;
-    const text = (name: string) => (typeof values[name] === "string" ? (values[name] as string).trim() : "");
-    const region = text("region") || "us-east-1";
-    const profile = text("awsProfile");
-    const claude = text("claudeExecutable") || findClaude();
-    const fromSettings = text("apiKey");
-    if (fromSettings) return { apiKey: fromSettings, source: "API key from the plugin settings", region, profile, claude };
+    const current = settings.bedrock();
+    const region = current.region || "us-east-1";
+    const profile = current.awsProfile;
+    const fromFile = await readSecretApiKey(await secretKeyPath());
+    if (fromFile) return { apiKey: fromFile, source: "API key from the plugin settings", region, profile };
     const fromKeychain = await keychainToken();
     if (fromKeychain) {
-      return { apiKey: fromKeychain, source: `API key from the keychain (${KEYCHAIN_SERVICE})`, region, profile, claude };
+      return { apiKey: fromKeychain, source: `API key from the keychain (${KEYCHAIN_SERVICE})`, region, profile };
     }
-    return { apiKey: null, source: profile ? `AWS profile ${profile}` : "AWS credential chain", region, profile, claude };
-  }
-
-  // bb's file for the secret apiKey setting: a 0600 file of the raw value
-  // (SDK: "Stored in a 0600 file under <dataDir>/plugins/<id>/secrets/"),
-  // deleted when the plugin is removed.
-  async function secretKeyPath(): Promise<string> {
-    let dataDir = process.env.BB_DATA_DIR ?? join(homedir(), ".bb");
-    try {
-      const config = await bb.sdk.system.config();
-      if (config.dataDir.length > 0) dataDir = config.dataDir;
-    } catch {
-      // keep the default
-    }
-    return join(dataDir, "plugins", PLUGIN_ID, "secrets", "apiKey");
+    return { apiKey: null, source: profile ? `AWS profile ${profile}` : "AWS credential chain", region, profile };
   }
 
   // Never the key itself: bb reports contributed values as-is in each
   // thread's provider.env-resolved event, which it stores. bin/claude-bedrock
-  // reads the key from the settings' secret file or the keychain instead.
+  // reads the key from the secret file or the keychain instead.
   bb.providers.experimental_contributeEnv(PROVIDER_ID, async () => {
-    const values = (await handle.get()) as Record<string, unknown>;
-    const text = (name: string) => (typeof values[name] === "string" ? (values[name] as string).trim() : "");
-    const region = text("region") || "us-east-1";
-    const profile = text("awsProfile");
-    const claude = text("claudeExecutable") || findClaude();
+    const current = settings.bedrock();
+    const region = current.region || "us-east-1";
+    const profile = current.awsProfile;
+    const claude = findClaude();
+    const keyPath = await secretKeyPath();
+    const hasFileKey = (await readSecretApiKey(keyPath)) !== null;
     const env = [
       { name: "CLAUDE_CODE_USE_BEDROCK", value: "1", reason: "Run Claude Code against Amazon Bedrock" },
       { name: "AWS_REGION", value: region, reason: "Bedrock region from the plugin settings" },
     ];
-    if (text("apiKey")) {
-      env.push({ name: "CLAUDE_BEDROCK_KEY_FILE", value: await secretKeyPath(), reason: "Bedrock API key (bb's file for the secret setting)" });
+    if (hasFileKey) {
+      env.push({ name: "CLAUDE_BEDROCK_KEY_FILE", value: keyPath, reason: "Bedrock API key (0600 secret file)" });
     } else {
       env.push({ name: "CLAUDE_BEDROCK_KEYCHAIN_SERVICE", value: KEYCHAIN_SERVICE, reason: "Bedrock API key from the macOS keychain, if present" });
     }
     if (profile) env.push({ name: "AWS_PROFILE", value: profile, reason: "AWS profile from the plugin settings" });
-    const factor = typeof values.priceFactor === "number" && values.priceFactor > 0 ? values.priceFactor : 1;
+    const factor = current.priceFactor > 0 ? current.priceFactor : 1;
     env.push({ name: "CLAUDE_BEDROCK_PRICE_FACTOR", value: String(factor), reason: "Price factor for the session cost in the context-window popup" });
     // Provider env wins over machine env, which keeps a machine-wide wrapper
     // meant for bb's own Claude Code provider (e.g. one that switches backends)

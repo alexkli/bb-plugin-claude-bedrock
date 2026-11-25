@@ -52,22 +52,6 @@ const cents = (usd: number) => Math.round(usd * 100);
 const usd = (amount: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
 
-export const BUDGET_SETTINGS = {
-  monthlyBudgetUsd: {
-    type: "number",
-    label: "Monthly budget (USD)",
-    description: "Scale for the usage bar. Today's bar uses this budget divided by the days in the month.",
-    default: 100,
-  },
-  priceFactor: {
-    type: "number",
-    label: "Price factor",
-    description:
-      "Multiplier on Claude Code's list-price cost estimate, for a negotiated Bedrock discount or markup (e.g. 0.8 for 20% below list). 1 shows list price.",
-    default: 1,
-  },
-} as const;
-
 export function registerBedrockUsage(
   bb: BbPluginApi,
   providerId: string,
